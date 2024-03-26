@@ -160,6 +160,9 @@ pub mod pallet {
 		/// Similar to `OnChargeTransaction` of `pallet_transaction_payment`
 		type OnChargeTransaction: OnChargeEVMTransaction<Self>;
 
+		/// Resolves the fee payer for a transaction.
+		type FeePayerResolver: FeePayerResolver<Self>;
+
 		/// Called on create calls, used to record owner
 		type OnCreate: OnCreate<Self>;
 
@@ -1087,5 +1090,15 @@ impl<T> OnCreate<T> for Tuple {
 		for_tuples!(#(
 			Tuple::on_create(owner, contract);
 		)*)
+	}
+}
+
+pub trait FeePayerResolver<T> {
+	fn resolve_fee_payer(source: H160, target: H160, input: Vec<u8>) -> Option<(H160, u64)>;
+}
+
+impl<T> FeePayerResolver<T> for () {
+	fn resolve_fee_payer(_source: H160, _target: H160, _input: Vec<u8>) -> Option<(H160, u64)> {
+		None
 	}
 }

@@ -40,6 +40,7 @@ hex = { workspace = true }
 pallet-balances = { workspace = true, features = ["default", "insecure_zero_ed"] }
 pallet-evm-precompile-simple = { workspace = true, features = ["default"] }
 pallet-timestamp = { workspace = true, features = ["default"] }
+env_logger = { version = "0.9.0" }
 
 [features]
 default = ["std"]

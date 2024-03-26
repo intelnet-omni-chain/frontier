@@ -628,7 +628,13 @@ type Balances = pallet_balances::Pallet<Test>;
 #[allow(clippy::upper_case_acronyms)]
 type EVM = Pallet<Test>;
 
+pub fn env_logger_init() {
+	let _ = env_logger::builder().is_test(true).try_init();
+}
+
 pub fn new_test_ext() -> sp_io::TestExternalities {
+	env_logger_init();
+
 	let mut t = frame_system::GenesisConfig::<Test>::default()
 		.build_storage()
 		.unwrap();
@@ -658,6 +664,24 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	);
 	accounts.insert(
 		H160::default(), // root
+		GenesisAccount {
+			nonce: U256::from(1),
+			balance: U256::max_value(),
+			storage: Default::default(),
+			code: vec![],
+		},
+	);
+	accounts.insert(
+		H160::from_str(MOCK_PAYER).unwrap(), // payer
+		GenesisAccount {
+			nonce: U256::from(1),
+			balance: U256::max_value(),
+			storage: Default::default(),
+			code: vec![],
+		},
+	);
+	accounts.insert(
+		H160::from_str(MOCK_SOURCE).unwrap(), // payer
 		GenesisAccount {
 			nonce: U256::from(1),
 			balance: U256::max_value(),
@@ -926,6 +950,51 @@ fn refunds_should_work() {
 		let total_cost = (U256::from(21_000) * base_fee) + U256::from(1);
 		let after_call = EVM::account_basic(&H160::default()).0.balance;
 		assert_eq!(after_call, before_call - total_cost);
+	});
+}
+
+#[test]
+fn refunds_payer_should_work() {
+	new_test_ext().execute_with(|| {
+		let mock_payer = H160::from_str(MOCK_PAYER).unwrap();
+		let mock_source = H160::from_str(MOCK_SOURCE).unwrap();
+		let payer_before_call = EVM::account_basic(&mock_payer).0.balance;
+		let target_before_call = EVM::account_basic(
+			&H160::from_str("1000000000000000000000000000000000000001").unwrap(),
+		)
+		.0
+		.balance;
+		let source_before_call = EVM::account_basic(&mock_source).0.balance;
+
+		// Gas price is not part of the actual fee calculations anymore, only the base fee.
+		//
+		// Because we first deduct max_fee_per_gas * gas_limit (2_000_000_000 * 1000000) we need
+		// to ensure that the difference (max fee VS base fee) is refunded.
+		let _ = EVM::call(
+			RuntimeOrigin::root(),
+			mock_source,
+			H160::from_str("1000000000000000000000000000000000000001").unwrap(),
+			Vec::new(),
+			U256::from(1),
+			1000000,
+			U256::from(2_000_000_000),
+			None,
+			None,
+			Vec::new(),
+		)
+		.expect("EVM call failed");
+		let (base_fee, _) = <Test as Config>::FeeCalculator::min_gas_price();
+		let total_cost = U256::from(21_000) * base_fee;
+		let payer_after_call = EVM::account_basic(&mock_payer).0.balance;
+		let target_after_call = EVM::account_basic(
+			&H160::from_str("1000000000000000000000000000000000000001").unwrap(),
+		)
+		.0
+		.balance;
+		let source_after_call = EVM::account_basic(&mock_source).0.balance;
+		assert_eq!(source_after_call, source_before_call - 1);
+		assert_eq!(target_after_call, target_before_call + 1);
+		assert_eq!(payer_after_call, payer_before_call - total_cost);
 	});
 }
 

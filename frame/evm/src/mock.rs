@@ -17,6 +17,8 @@
 
 //! Test mock for unit tests and benchmarking
 
+use core::marker::PhantomData;
+
 use frame_support::{
 	parameter_types,
 	traits::{ConstU32, FindAuthor},
@@ -30,8 +32,9 @@ use sp_runtime::{
 use sp_std::{boxed::Box, prelude::*, str::FromStr};
 
 use crate::{
-	EnsureAddressNever, EnsureAddressRoot, FeeCalculator, IdentityAddressMapping,
-	IsPrecompileResult, Precompile, PrecompileHandle, PrecompileResult, PrecompileSet,
+	Config, EnsureAddressNever, EnsureAddressRoot, FeeCalculator, FeePayerResolver,
+	IdentityAddressMapping, IsPrecompileResult, Precompile, PrecompileHandle, PrecompileResult,
+	PrecompileSet,
 };
 
 frame_support::construct_runtime! {
@@ -133,6 +136,8 @@ parameter_types! {
 	pub SuicideQuickClearLimit: u32 = 0;
 }
 impl crate::Config for Test {
+	type FeePayerResolver = MockPayerResolver<Self>;
+
 	type FeeCalculator = FixedGasPrice;
 	type GasWeightMapping = crate::FixedGasWeightMapping<Self>;
 	type WeightPerGas = WeightPerGas;
@@ -157,6 +162,20 @@ impl crate::Config for Test {
 	type SuicideQuickClearLimit = SuicideQuickClearLimit;
 	type Timestamp = Timestamp;
 	type WeightInfo = ();
+}
+
+pub struct MockPayerResolver<T>(PhantomData<T>);
+
+pub const MOCK_SOURCE: &str = "1234000000000000000000000000000000000001";
+pub const MOCK_PAYER: &str = "5678000000000000000000000000000000000001";
+
+impl<T: Config> FeePayerResolver<T> for MockPayerResolver<T> {
+	fn resolve_fee_payer(source: H160, _target: H160, _input: Vec<u8>) -> Option<(H160, u64)> {
+		if source == H160::from_str(MOCK_SOURCE).unwrap() {
+			return Some((H160::from_str(MOCK_PAYER).unwrap(), 30_000_000));
+		}
+		None
+	}
 }
 
 /// Example PrecompileSet with only Identity precompile.

@@ -49,8 +49,8 @@ use fp_evm::{
 
 use crate::{
 	runner::Runner as RunnerT, AccountCodes, AccountCodesMetadata, AccountStorages, AddressMapping,
-	BalanceOf, BlockHashMapping, Config, Error, Event, FeeCalculator, OnChargeEVMTransaction,
-	OnCreate, Pallet, RunnerError,
+	BalanceOf, BlockHashMapping, Config, Error, Event, FeeCalculator, FeePayerResolver,
+	OnChargeEVMTransaction, OnCreate, Pallet, RunnerError,
 };
 
 #[cfg(feature = "forbid-evm-reentrancy")]
@@ -69,6 +69,8 @@ where
 	/// Execute an already validated EVM operation.
 	fn execute<'config, 'precompiles, F, R>(
 		source: H160,
+		target: Option<H160>,
+		input: Vec<u8>,
 		value: U256,
 		gas_limit: u64,
 		max_fee_per_gas: Option<U256>,
@@ -101,8 +103,16 @@ where
 			});
 		}
 
+		let (payer, gas_limit) = match target {
+			Some(t) => T::FeePayerResolver::resolve_fee_payer(source, t, input.clone())
+				.unwrap_or((source, gas_limit)),
+			None => (source, gas_limit),
+		};
+
 		let res = Self::execute_inner(
 			source,
+			payer,
+			target,
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -128,6 +138,8 @@ where
 	// Execute an already validated EVM operation.
 	fn execute_inner<'config, 'precompiles, F, R>(
 		source: H160,
+		payer: H160,
+		target: Option<H160>,
 		value: U256,
 		mut gas_limit: u64,
 		max_fee_per_gas: Option<U256>,
@@ -231,7 +243,7 @@ where
 				})?;
 
 		// Deduct fee from the `source` account. Returns `None` if `total_fee` is Zero.
-		let fee = T::OnChargeTransaction::withdraw_fee(&source, total_fee)
+		let fee = T::OnChargeTransaction::withdraw_fee(&payer, total_fee)
 			.map_err(|e| RunnerError { error: e, weight })?;
 
 		// Execute the EVM call.
@@ -297,7 +309,7 @@ where
 		// Tip 5 * 6 = 30.
 		// Burned 200 - (160 + 30) = 10. Which is equivalent to gas_used * base_fee.
 		let actual_priority_fee = T::OnChargeTransaction::correct_and_deposit_fee(
-			&source,
+			&payer,
 			// Actual fee after evm execution, including tip.
 			actual_fee,
 			// Base fee.
@@ -441,6 +453,8 @@ where
 		let precompiles = T::PrecompilesValue::get();
 		Self::execute(
 			source,
+			Some(target),
+			input.clone(),
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -489,6 +503,8 @@ where
 		let precompiles = T::PrecompilesValue::get();
 		Self::execute(
 			source,
+			None,
+			Vec::new(),
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -545,6 +561,8 @@ where
 		let code_hash = H256::from(sp_io::hashing::keccak_256(&init));
 		Self::execute(
 			source,
+			None,
+			Vec::new(),
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -1198,6 +1216,8 @@ mod tests {
 		// Should fail with the appropriate error if there is reentrancy
 		let res = Runner::<Test>::execute(
 			H160::default(),
+			None,
+			Vec::new(),
 			U256::default(),
 			100_000,
 			None,
@@ -1210,6 +1230,8 @@ mod tests {
 			|_| {
 				let res = Runner::<Test>::execute(
 					H160::default(),
+					None,
+					Vec::new(),
 					U256::default(),
 					100_000,
 					None,
@@ -1242,6 +1264,8 @@ mod tests {
 		// Should succeed if there is no reentrancy
 		let res = Runner::<Test>::execute(
 			H160::default(),
+			None,
+			Vec::new(),
 			U256::default(),
 			100_000,
 			None,
