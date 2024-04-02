@@ -61,11 +61,12 @@ use fp_consensus::{PostLog, PreLog, FRONTIER_ENGINE_ID};
 pub use fp_ethereum::TransactionData;
 use fp_ethereum::ValidatedTransaction as ValidatedTransactionT;
 use fp_evm::{
-	CallOrCreateInfo, CheckEvmTransaction, CheckEvmTransactionConfig, TransactionValidationError,
+	CallOrCreateInfo, CheckEvmTransaction, CheckEvmTransactionConfig, CheckEvmTransactionInput,
+	TransactionValidationError,
 };
 pub use fp_rpc::TransactionStatus;
 use fp_storage::{EthereumStorageSchema, PALLET_ETHEREUM_SCHEMA};
-use pallet_evm::{BlockHashMapping, FeeCalculator, GasWeightMapping, Runner};
+use pallet_evm::{BlockHashMapping, FeeCalculator, FeePayerResolver, GasWeightMapping, Runner};
 
 #[derive(Clone, Eq, PartialEq, RuntimeDebug)]
 #[derive(Encode, Decode, MaxEncodedLen, TypeInfo)]
@@ -492,8 +493,47 @@ impl<T: Config> Pallet<T> {
 		let transaction_nonce = transaction_data.nonce;
 		let (weight_limit, proof_size_base_cost) = Self::transaction_weight(&transaction_data);
 		let (base_fee, _) = T::FeeCalculator::min_gas_price();
+
 		let (who, _) = pallet_evm::Pallet::<T>::account_basic(&origin);
 
+		// TODO: fee sponsorship call should not have transaction.value but we are safe now due to always passing None as Transfer in precompile
+		let (
+			payer,
+			sponsored_gas_limit,
+			sponsored_max_fee_per_gas,
+			sponsored_max_priority_fee_per_gas,
+		) = match transaction_data.action {
+			TransactionAction::Call(target) => {
+				<T as pallet_evm::Config>::FeePayerResolver::resolve_fee_payer(
+					origin,
+					target,
+					transaction_data.input.clone(),
+				)
+				.map_or(
+					(who.clone(), None, None, None),
+					|(sponsorer, (gas_limit, max_fee_per_gas, max_priority_fee_per_gas))| {
+						(
+							pallet_evm::Pallet::<T>::account_basic(&sponsorer).0,
+							Some(U256::from(gas_limit)),
+							Some(max_fee_per_gas),
+							Some(max_priority_fee_per_gas),
+						)
+					},
+				)
+			}
+			TransactionAction::Create => (who.clone(), None, None, None),
+		};
+
+		// Constructs a new `TransactionData` instance from an existing one, overriding
+		// fields if sponsor-provided gas limit/fees are present.
+		let transaction_data = TransactionData {
+			gas_limit: sponsored_gas_limit.unwrap_or(transaction_data.gas_limit),
+			max_fee_per_gas: sponsored_max_fee_per_gas.or(transaction_data.max_fee_per_gas),
+			max_priority_fee_per_gas: sponsored_max_priority_fee_per_gas
+				.or(transaction_data.max_priority_fee_per_gas),
+			gas_price: sponsored_max_fee_per_gas.map_or(transaction_data.gas_price, |_| None),
+			..transaction_data
+		};
 		let _ = CheckEvmTransaction::<InvalidTransactionWrapper>::new(
 			CheckEvmTransactionConfig {
 				evm_config: T::config(),
@@ -509,7 +549,7 @@ impl<T: Config> Pallet<T> {
 		.validate_in_pool_for(&who)
 		.and_then(|v| v.with_chain_id())
 		.and_then(|v| v.with_base_fee())
-		.and_then(|v| v.with_balance_for(&who))
+		.and_then(|v| v.with_balance_for(&payer))
 		.map_err(|e| e.0)?;
 
 		// EIP-3607: https://eips.ethereum.org/EIPS/eip-3607
@@ -862,6 +902,54 @@ impl<T: Config> Pallet<T> {
 		let (base_fee, _) = T::FeeCalculator::min_gas_price();
 		let (who, _) = pallet_evm::Pallet::<T>::account_basic(&origin);
 
+		let (payer, (gas_limit, max_fee_per_gas, max_priority_fee_per_gas, gas_price)) =
+			match transaction_data.action {
+				ethereum::TransactionAction::Call(target) => {
+					T::FeePayerResolver::resolve_fee_payer(
+						origin.clone(),
+						target,
+						transaction_data.input.clone(),
+					)
+					.map(
+						|(payer, (gas_limit, max_fee_per_gas, max_priority_fee_per_gas))| {
+							(
+								payer,
+								(
+									gas_limit,
+									Some(max_fee_per_gas),
+									Some(max_priority_fee_per_gas),
+									None,
+								),
+							)
+						},
+					)
+					.unwrap_or((
+						origin,
+						(
+							transaction_data.gas_limit.saturated_into(),
+							transaction_data.max_fee_per_gas,
+							transaction_data.max_priority_fee_per_gas,
+							transaction_data.gas_price,
+						),
+					))
+				}
+				ethereum::TransactionAction::Create => (
+					origin,
+					(
+						transaction_data.gas_limit.saturated_into(),
+						transaction_data.max_fee_per_gas,
+						transaction_data.max_priority_fee_per_gas,
+						transaction_data.gas_price,
+					),
+				),
+			};
+
+		let payer_account = if payer == origin {
+			who.clone()
+		} else {
+			pallet_evm::Pallet::<T>::account_basic(&payer).0
+		};
+
 		let _ = CheckEvmTransaction::<InvalidTransactionWrapper>::new(
 			CheckEvmTransactionConfig {
 				evm_config: T::config(),
@@ -870,14 +958,20 @@ impl<T: Config> Pallet<T> {
 				chain_id: T::ChainId::get(),
 				is_transactional: true,
 			},
-			transaction_data.into(),
+			CheckEvmTransactionInput {
+				gas_limit: gas_limit.into(),
+				max_fee_per_gas,
+				max_priority_fee_per_gas,
+				gas_price,
+				..transaction_data.into()
+			},
 			weight_limit,
 			proof_size_base_cost,
 		)
 		.validate_in_block_for(&who)
 		.and_then(|v| v.with_chain_id())
 		.and_then(|v| v.with_base_fee())
-		.and_then(|v| v.with_balance_for(&who))
+		.and_then(|v| v.with_balance_for(&payer_account))
 		.map_err(|e| TransactionValidityError::Invalid(e.0))?;
 
 		Ok(())

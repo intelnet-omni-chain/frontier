@@ -1094,11 +1094,21 @@ impl<T> OnCreate<T> for Tuple {
 }
 
 pub trait FeePayerResolver<T> {
-	fn resolve_fee_payer(source: H160, target: H160, input: Vec<u8>) -> Option<(H160, u64)>;
+	// TODO: pass argument as reference
+	/// Resolve the fee payer for given source, target and input.
+	fn resolve_fee_payer(
+		source: H160,
+		target: H160,
+		input: Vec<u8>,
+	) -> Option<(H160, (u64, U256, U256))>; // (payer, (gas_limit, max_fee_per_gas, max_priority_fee_per_gas))
 }
 
 impl<T> FeePayerResolver<T> for () {
-	fn resolve_fee_payer(_source: H160, _target: H160, _input: Vec<u8>) -> Option<(H160, u64)> {
+	fn resolve_fee_payer(
+		_source: H160,
+		_target: H160,
+		_input: Vec<u8>,
+	) -> Option<(H160, (u64, U256, U256))> {
 		None
 	}
 }

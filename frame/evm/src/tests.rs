@@ -1203,6 +1203,41 @@ fn runner_transactional_call_with_zero_gas_price_fails() {
 }
 
 #[test]
+fn runner_transactional_call_with_zero_gas_price_sponsored() {
+	new_test_ext().execute_with(|| {
+		let mock_payer = H160::from_str(MOCK_PAYER).unwrap();
+		let mock_source = H160::from_str(MOCK_SOURCE).unwrap();
+		let payer_before_call = EVM::account_basic(&mock_payer).0.balance;
+		let source_before_call = EVM::account_basic(&mock_source).0.balance;
+
+		let res = <Test as Config>::Runner::call(
+			H160::from_str(MOCK_SOURCE).unwrap(),
+			H160::from_str("1000000000000000000000000000000000000001").unwrap(),
+			Vec::new(),
+			U256::from(0),
+			0,
+			None,
+			None,
+			None,
+			Vec::new(),
+			true, // transactional
+			true, // must be validated
+			None,
+			None,
+			&<Test as Config>::config().clone(),
+		);
+
+		assert!(res.is_ok());
+		let (base_fee, _) = <Test as Config>::FeeCalculator::min_gas_price();
+		let total_cost = U256::from(21_000) * base_fee;
+		let payer_after_call = EVM::account_basic(&mock_payer).0.balance;
+		let source_after_call = EVM::account_basic(&mock_source).0.balance;
+		assert_eq!(source_after_call, source_before_call);
+		assert_eq!(payer_after_call, payer_before_call - total_cost);
+	});
+}
+
+#[test]
 fn runner_max_fee_per_gas_gte_max_priority_fee_per_gas() {
 	// Transactional and non transactional calls enforce `max_fee_per_gas >= max_priority_fee_per_gas`.
 	new_test_ext().execute_with(|| {

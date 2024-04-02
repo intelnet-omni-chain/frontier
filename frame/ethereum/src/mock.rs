@@ -160,6 +160,7 @@ parameter_types! {
 
 impl pallet_evm::Config for Test {
 	type FeeCalculator = FixedGasPrice;
+	type FeePayerResolver =  ();
 	type GasWeightMapping = pallet_evm::FixedGasWeightMapping<Self>;
 	type WeightPerGas = WeightPerGas;
 	type BlockHashMapping = crate::EthereumBlockHashMapping<Self>;

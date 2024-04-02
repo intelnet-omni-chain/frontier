@@ -69,8 +69,7 @@ where
 	/// Execute an already validated EVM operation.
 	fn execute<'config, 'precompiles, F, R>(
 		source: H160,
-		target: Option<H160>,
-		input: Vec<u8>,
+		payer: H160,
 		value: U256,
 		gas_limit: u64,
 		max_fee_per_gas: Option<U256>,
@@ -103,16 +102,9 @@ where
 			});
 		}
 
-		let (payer, gas_limit) = match target {
-			Some(t) => T::FeePayerResolver::resolve_fee_payer(source, t, input.clone())
-				.unwrap_or((source, gas_limit)),
-			None => (source, gas_limit),
-		};
-
 		let res = Self::execute_inner(
 			source,
 			payer,
-			target,
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -139,7 +131,6 @@ where
 	fn execute_inner<'config, 'precompiles, F, R>(
 		source: H160,
 		payer: H160,
-		target: Option<H160>,
 		value: U256,
 		mut gas_limit: u64,
 		max_fee_per_gas: Option<U256>,
@@ -348,6 +339,7 @@ where
 				},
 			});
 		}
+		// TODO: trait that generate additional logs (log for fee sponsorship)
 
 		Ok(ExecutionInfoV2 {
 			value: retv,
@@ -370,6 +362,7 @@ where
 
 	fn validate(
 		source: H160,
+		payer: H160,
 		target: Option<H160>,
 		input: Vec<u8>,
 		value: U256,
@@ -385,6 +378,13 @@ where
 	) -> Result<(), RunnerError<Self::Error>> {
 		let (base_fee, mut weight) = T::FeeCalculator::min_gas_price();
 		let (source_account, inner_weight) = Pallet::<T>::account_basic(&source);
+		weight = weight.saturating_add(inner_weight);
+
+		let (payer_account, inner_weight) = if source == payer {
+			(source_account.clone(), Weight::zero())
+		} else {
+			Pallet::<T>::account_basic(&payer)
+		};
 		weight = weight.saturating_add(inner_weight);
 
 		let _ = fp_evm::CheckEvmTransaction::<Self::Error>::new(
@@ -412,7 +412,7 @@ where
 		)
 		.validate_in_block_for(&source_account)
 		.and_then(|v| v.with_base_fee())
-		.and_then(|v| v.with_balance_for(&source_account))
+		.and_then(|v| v.with_balance_for(&payer_account))
 		.map_err(|error| RunnerError { error, weight })?;
 		Ok(())
 	}
@@ -433,9 +433,29 @@ where
 		proof_size_base_cost: Option<u64>,
 		config: &evm::Config,
 	) -> Result<CallInfo, RunnerError<Self::Error>> {
+		let (payer, (gas_limit, max_fee_per_gas, max_priority_fee_per_gas)) =
+			T::FeePayerResolver::resolve_fee_payer(source, target, input.clone())
+				.map(
+					|(payer, (gas_limit, max_fee_per_gas, max_priority_fee_per_gas))| {
+						(
+							payer,
+							(
+								gas_limit,
+								Some(max_fee_per_gas),
+								Some(max_priority_fee_per_gas),
+							),
+						)
+					},
+				)
+				.unwrap_or((
+					source,
+					(gas_limit, max_fee_per_gas, max_priority_fee_per_gas),
+				));
+
 		if validate {
 			Self::validate(
 				source,
+				payer,
 				Some(target),
 				input.clone(),
 				value,
@@ -453,8 +473,7 @@ where
 		let precompiles = T::PrecompilesValue::get();
 		Self::execute(
 			source,
-			Some(target),
-			input.clone(),
+			payer,
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -483,9 +502,11 @@ where
 		proof_size_base_cost: Option<u64>,
 		config: &evm::Config,
 	) -> Result<CreateInfo, RunnerError<Self::Error>> {
+		let payer = source.clone();
 		if validate {
 			Self::validate(
 				source,
+				payer,
 				None,
 				init.clone(),
 				value,
@@ -503,8 +524,7 @@ where
 		let precompiles = T::PrecompilesValue::get();
 		Self::execute(
 			source,
-			None,
-			Vec::new(),
+			payer,
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -540,9 +560,11 @@ where
 		proof_size_base_cost: Option<u64>,
 		config: &evm::Config,
 	) -> Result<CreateInfo, RunnerError<Self::Error>> {
+		let payer = source.clone();
 		if validate {
 			Self::validate(
 				source,
+				payer,
 				None,
 				init.clone(),
 				value,
@@ -561,8 +583,7 @@ where
 		let code_hash = H256::from(sp_io::hashing::keccak_256(&init));
 		Self::execute(
 			source,
-			None,
-			Vec::new(),
+			payer,
 			value,
 			gas_limit,
 			max_fee_per_gas,
@@ -1216,8 +1237,8 @@ mod tests {
 		// Should fail with the appropriate error if there is reentrancy
 		let res = Runner::<Test>::execute(
 			H160::default(),
+			H160::default(),
 			None,
-			Vec::new(),
 			U256::default(),
 			100_000,
 			None,
@@ -1230,8 +1251,8 @@ mod tests {
 			|_| {
 				let res = Runner::<Test>::execute(
 					H160::default(),
+					H160::default(),
 					None,
-					Vec::new(),
 					U256::default(),
 					100_000,
 					None,
@@ -1264,8 +1285,8 @@ mod tests {
 		// Should succeed if there is no reentrancy
 		let res = Runner::<Test>::execute(
 			H160::default(),
+			H160::default(),
 			None,
-			Vec::new(),
 			U256::default(),
 			100_000,
 			None,

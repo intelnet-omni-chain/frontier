@@ -170,9 +170,16 @@ pub const MOCK_SOURCE: &str = "1234000000000000000000000000000000000001";
 pub const MOCK_PAYER: &str = "5678000000000000000000000000000000000001";
 
 impl<T: Config> FeePayerResolver<T> for MockPayerResolver<T> {
-	fn resolve_fee_payer(source: H160, _target: H160, _input: Vec<u8>) -> Option<(H160, u64)> {
+	fn resolve_fee_payer(
+		source: H160,
+		_target: H160,
+		_input: Vec<u8>,
+	) -> Option<(H160, (u64, U256, U256))> {
 		if source == H160::from_str(MOCK_SOURCE).unwrap() {
-			return Some((H160::from_str(MOCK_PAYER).unwrap(), 30_000_000));
+			return Some((
+				H160::from_str(MOCK_PAYER).unwrap(),
+				(30_000_000, U256::from(2_000_000_000), U256::zero()),
+			));
 		}
 		None
 	}

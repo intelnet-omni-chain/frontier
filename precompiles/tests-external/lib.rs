@@ -227,6 +227,7 @@ parameter_types! {
 
 impl pallet_evm::Config for Runtime {
 	type FeeCalculator = ();
+	type FeePayerResolver = ();
 	type GasWeightMapping = pallet_evm::FixedGasWeightMapping<Self>;
 	type WeightPerGas = WeightPerGas;
 	type BlockHashMapping = pallet_evm::SubstrateBlockHashMapping<Self>;
